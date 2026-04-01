@@ -3,7 +3,7 @@ import time
 import huggingface_hub
 import numpy as np
 import torch
-from typing import BinaryIO, Union, Tuple, List, Callable
+from typing import BinaryIO, Union, Tuple, List, Callable, Optional
 import faster_whisper
 from faster_whisper.vad import VadOptions
 import ast
@@ -42,6 +42,7 @@ class FasterWhisperInference(BaseTranscriptionPipeline):
                    progress: gr.Progress = gr.Progress(),
                    progress_callback: Optional[Callable] = None,
                    *whisper_params,
+                   status_callback: Optional[Callable] = None,
                    ) -> Tuple[List[Segment], float]:
         """
         transcribe method for faster-whisper.
@@ -69,6 +70,8 @@ class FasterWhisperInference(BaseTranscriptionPipeline):
         params = WhisperParams.from_list(list(whisper_params))
 
         if params.model_size != self.current_model_size or self.model is None or self.current_compute_type != params.compute_type:
+            if status_callback is not None:
+                status_callback(0.0, "Initializing Model..")
             self.update_model(params.model_size, params.compute_type, progress)
 
         segments, info = self.model.transcribe(
@@ -102,6 +105,8 @@ class FasterWhisperInference(BaseTranscriptionPipeline):
             prompt_reset_on_temperature=params.prompt_reset_on_temperature,
         )
         progress(0, desc="Loading audio..")
+        if status_callback is not None:
+            status_callback(0.0, "Loading audio..")
 
         segments_result = []
         for segment in segments:
@@ -109,6 +114,8 @@ class FasterWhisperInference(BaseTranscriptionPipeline):
             progress(progress_n, desc="Transcribing..")
             if progress_callback is not None:
                 progress_callback(progress_n)
+            if status_callback is not None:
+                status_callback(progress_n, "Transcribing..")
             segments_result.append(Segment.from_faster_whisper(segment))
 
         elapsed_time = time.time() - start_time

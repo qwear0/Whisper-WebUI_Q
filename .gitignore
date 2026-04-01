@@ -7,7 +7,8 @@
 **/.pytest_cache/
 **/venv/
 **/__pycache__/
+# Local/private config and generated outputs
+configs/
 outputs/
 models/
 modules/yt_tmp.wav
-configs/default_parameters.yaml

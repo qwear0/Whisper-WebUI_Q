@@ -35,6 +35,121 @@ CSS = """
 #md_project a:hover {
   text-decoration: underline;
 }
+
+.task-monitor {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.task-monitor__section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.task-monitor__title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.task-monitor__cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+}
+
+.task-monitor__card {
+    border: 1px solid #d8d8d8;
+    border-radius: 10px;
+    padding: 12px;
+    background: #fafafa;
+}
+
+.task-monitor__card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.task-monitor__badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: capitalize;
+    background: #e8ecf3;
+    color: #29405b;
+}
+
+.task-monitor__badge--queued {
+    background: #fff4d6;
+    color: #8a5b00;
+}
+
+.task-monitor__badge--in_progress {
+    background: #dff4ff;
+    color: #0a558c;
+}
+
+.task-monitor__badge--completed {
+    background: #e3f7e8;
+    color: #17633c;
+}
+
+.task-monitor__badge--failed {
+    background: #fde7e9;
+    color: #9f1d2d;
+}
+
+.task-monitor__source {
+    font-size: 12px;
+    color: #666;
+    text-transform: capitalize;
+}
+
+.task-monitor__label {
+    font-size: 14px;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.task-monitor__message,
+.task-monitor__meta,
+.task-monitor__empty {
+    font-size: 12px;
+    color: #555;
+    margin-top: 6px;
+    word-break: break-word;
+}
+
+.task-monitor__progress {
+    margin-top: 8px;
+}
+
+.task-monitor__progress-track {
+    width: 100%;
+    height: 8px;
+    background: #ececec;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.task-monitor__progress-fill {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #4f8cff 0%, #36c0a4 100%);
+}
+
+.task-monitor__progress-text {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #555;
+}
 """
 
 MARKDOWN = """

@@ -3,13 +3,17 @@
 import numpy as np
 import pandas as pd
 import os
-from pyannote.audio import Pipeline
 from typing import Optional, Union
 import torch
 
 from modules.whisper.data_classes import *
 from modules.utils.paths import DIARIZATION_MODELS_DIR
+from modules.utils.torch_load_compat import allow_trusted_checkpoint_loading
 from modules.diarize.audio_loader import load_audio, SAMPLE_RATE
+
+os.environ.setdefault("PYANNOTE_CACHE", DIARIZATION_MODELS_DIR)
+
+from pyannote.audio import Pipeline
 
 
 class DiarizationPipeline:
@@ -22,11 +26,12 @@ class DiarizationPipeline:
     ):
         if isinstance(device, str):
             device = torch.device(device)
-        self.model = Pipeline.from_pretrained(
-            model_name,
-            use_auth_token=use_auth_token,
-            cache_dir=cache_dir
-        ).to(device)
+        with allow_trusted_checkpoint_loading():
+            self.model = Pipeline.from_pretrained(
+                model_name,
+                use_auth_token=use_auth_token,
+                cache_dir=cache_dir
+            ).to(device)
 
     def __call__(self, audio: Union[str, np.ndarray], min_speakers=None, max_speakers=None):
         if isinstance(audio, str):

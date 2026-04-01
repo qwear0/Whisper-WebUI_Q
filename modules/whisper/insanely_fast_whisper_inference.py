@@ -1,7 +1,7 @@
 import os
 import time
 import numpy as np
-from typing import BinaryIO, Union, Tuple, List, Callable
+from typing import BinaryIO, Union, Tuple, List, Callable, Optional
 import torch
 from transformers import pipeline
 from transformers.utils import is_flash_attn_2_available
@@ -42,6 +42,7 @@ class InsanelyFastWhisperInference(BaseTranscriptionPipeline):
                    progress: gr.Progress = gr.Progress(),
                    progress_callback: Optional[Callable] = None,
                    *whisper_params,
+                   status_callback: Optional[Callable] = None,
                    ) -> Tuple[List[Segment], float]:
         """
         transcribe method for faster-whisper.
@@ -68,9 +69,13 @@ class InsanelyFastWhisperInference(BaseTranscriptionPipeline):
         params = WhisperParams.from_list(list(whisper_params))
 
         if params.model_size != self.current_model_size or self.model is None or self.current_compute_type != params.compute_type:
+            if status_callback is not None:
+                status_callback(0.0, "Initializing Model..")
             self.update_model(params.model_size, params.compute_type, progress)
 
         progress(0, desc="Transcribing...Progress is not shown in insanely-fast-whisper.")
+        if status_callback is not None:
+            status_callback(0.0, "Transcribing...Progress is not shown in insanely-fast-whisper.")
         with Progress(
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(style="yellow1", pulse_style="white"),
@@ -109,6 +114,11 @@ class InsanelyFastWhisperInference(BaseTranscriptionPipeline):
                 start=start,
                 end=end
             ))
+
+        if progress_callback is not None:
+            progress_callback(1.0)
+        if status_callback is not None:
+            status_callback(1.0, "Transcribing...Progress is not shown in insanely-fast-whisper.")
 
         elapsed_time = time.time() - start_time
         return segments_result, elapsed_time

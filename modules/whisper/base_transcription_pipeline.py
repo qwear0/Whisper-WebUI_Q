@@ -4,7 +4,7 @@ import ctranslate2
 import gradio as gr
 import torchaudio
 from abc import ABC, abstractmethod
-from typing import BinaryIO, Union, Tuple, List, Callable
+from typing import BinaryIO, Union, Tuple, List, Callable, Optional
 import numpy as np
 from datetime import datetime
 from faster_whisper.vad import VadOptions
@@ -63,6 +63,7 @@ class BaseTranscriptionPipeline(ABC):
                    progress: gr.Progress = gr.Progress(),
                    progress_callback: Optional[Callable] = None,
                    *whisper_params,
+                   status_callback: Optional[Callable] = None,
                    ):
         """Inference whisper model to transcribe"""
         pass
@@ -83,6 +84,7 @@ class BaseTranscriptionPipeline(ABC):
             add_timestamp: bool = True,
             progress_callback: Optional[Callable] = None,
             *pipeline_params,
+            status_callback: Optional[Callable] = None,
             ) -> Tuple[List[Segment], float]:
         """
         Run transcription with conditional pre-processing and post-processing.
@@ -117,6 +119,10 @@ class BaseTranscriptionPipeline(ABC):
         """
         start_time = time.time()
 
+        def emit_status(progress_value: Optional[float], message: str):
+            if status_callback is not None:
+                status_callback(progress_value, message)
+
         if not validate_audio(audio):
             return [Segment()], 0
 
@@ -125,6 +131,7 @@ class BaseTranscriptionPipeline(ABC):
         bgm_params, vad_params, whisper_params, diarization_params = params.bgm_separation, params.vad, params.whisper, params.diarization
 
         if bgm_params.is_separate_bgm:
+            emit_status(0.0, "Separating background music..")
             music, audio, _ = self.music_separator.separate(
                 audio=audio,
                 model_name=bgm_params.uvr_model_size,
@@ -150,6 +157,7 @@ class BaseTranscriptionPipeline(ABC):
 
         if vad_params.vad_filter:
             progress(0, desc="Filtering silent parts from audio..")
+            emit_status(0.0, "Filtering silent parts from audio..")
             vad_options = VadOptions(
                 threshold=vad_params.threshold,
                 min_speech_duration_ms=vad_params.min_speech_duration_ms,
@@ -169,11 +177,19 @@ class BaseTranscriptionPipeline(ABC):
             else:
                 vad_params.vad_filter = False
 
+        emit_status(0.0, "Transcribing..")
+
+        def combined_progress_callback(progress_value: float):
+            if progress_callback is not None:
+                progress_callback(progress_value)
+            emit_status(progress_value, "Transcribing..")
+
         result, elapsed_time_transcription = self.transcribe(
             audio,
             progress,
-            progress_callback,
-            *whisper_params.to_list()
+            combined_progress_callback,
+            *whisper_params.to_list(),
+            status_callback=status_callback,
         )
         if whisper_params.enable_offload:
             self.offload()
@@ -190,6 +206,7 @@ class BaseTranscriptionPipeline(ABC):
 
         if diarization_params.is_diarize:
             progress(0.99, desc="Diarizing speakers..")
+            emit_status(0.99, "Diarizing speakers..")
             result, elapsed_time_diarization = self.diarizer.run(
                 audio=origin_audio,
                 use_auth_token=diarization_params.hf_token if diarization_params.hf_token else os.environ.get("HF_TOKEN"),
@@ -210,6 +227,7 @@ class BaseTranscriptionPipeline(ABC):
             result = [Segment()]
 
         progress(1.0, desc="Finished.")
+        emit_status(1.0, "Finished.")
         total_elapsed_time = time.time() - start_time
         return result, total_elapsed_time
 
@@ -222,6 +240,7 @@ class BaseTranscriptionPipeline(ABC):
                         add_timestamp: bool = True,
                         progress=gr.Progress(),
                         *pipeline_params,
+                        status_callback: Optional[Callable] = None,
                         ) -> Tuple[str, List]:
         """
         Write subtitle file from Files
@@ -265,11 +284,38 @@ class BaseTranscriptionPipeline(ABC):
                 files = get_media_files(input_folder_path, include_sub_directory=include_subdirectory)
             if isinstance(files, str):
                 files = [files]
+            if files is None:
+                files = []
+            else:
+                files = list(files)
             if files and isinstance(files[0], gr.utils.NamedString):
                 files = [file.name for file in files]
+            if not files:
+                raise ValueError("No input files provided")
 
             files_info = {}
-            for file in files:
+            total_files = len(files)
+            for index, file in enumerate(files):
+                current_file_name = os.path.basename(file)
+
+                def file_status_callback(progress_value: Optional[float], message: str):
+                    if status_callback is None:
+                        return
+
+                    overall_progress = None
+                    if progress_value is not None and total_files > 0:
+                        overall_progress = (index + progress_value) / total_files
+
+                    status_message = f"{message} ({index + 1}/{total_files}: {current_file_name})"
+                    try:
+                        status_callback(
+                            overall_progress,
+                            status_message,
+                            current_item=current_file_name,
+                        )
+                    except TypeError:
+                        status_callback(overall_progress, status_message)
+
                 transcribed_segments, time_for_task = self.run(
                     file,
                     progress,
@@ -277,6 +323,7 @@ class BaseTranscriptionPipeline(ABC):
                     add_timestamp,
                     None,
                     *pipeline_params,
+                    status_callback=file_status_callback,
                 )
 
                 file_name, file_ext = os.path.splitext(os.path.basename(file))
@@ -301,6 +348,12 @@ class BaseTranscriptionPipeline(ABC):
                 )
                 files_info[file_name] = {"subtitle": read_file(file_path), "time_for_task": time_for_task, "path": file_path}
 
+            if status_callback is not None:
+                try:
+                    status_callback(1.0, "Finished.", current_item="")
+                except TypeError:
+                    status_callback(1.0, "Finished.")
+
             total_result = ''
             total_time = 0
             for file_name, info in files_info.items():
@@ -323,6 +376,7 @@ class BaseTranscriptionPipeline(ABC):
                        add_timestamp: bool = True,
                        progress=gr.Progress(),
                        *pipeline_params,
+                       status_callback: Optional[Callable] = None,
                        ) -> Tuple[str, str]:
         """
         Write subtitle file from microphone
@@ -361,6 +415,7 @@ class BaseTranscriptionPipeline(ABC):
                 add_timestamp,
                 None,
                 *pipeline_params,
+                status_callback=status_callback,
             )
             progress(1, desc="Completed!")
 
@@ -385,6 +440,7 @@ class BaseTranscriptionPipeline(ABC):
                            add_timestamp: bool = True,
                            progress=gr.Progress(),
                            *pipeline_params,
+                           status_callback: Optional[Callable] = None,
                            ) -> Tuple[str, str]:
         """
         Write subtitle file from Youtube
@@ -426,6 +482,7 @@ class BaseTranscriptionPipeline(ABC):
                 add_timestamp,
                 None,
                 *pipeline_params,
+                status_callback=status_callback,
             )
 
             progress(1, desc="Completed!")

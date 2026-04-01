@@ -31,6 +31,7 @@ class WhisperInference(BaseTranscriptionPipeline):
                    progress: gr.Progress = gr.Progress(),
                    progress_callback: Optional[Callable] = None,
                    *whisper_params,
+                   status_callback: Optional[Callable] = None,
                    ) -> Tuple[List[Segment], float]:
         """
         transcribe method for faster-whisper.
@@ -57,10 +58,16 @@ class WhisperInference(BaseTranscriptionPipeline):
         params = WhisperParams.from_list(list(whisper_params))
 
         if params.model_size != self.current_model_size or self.model is None or self.current_compute_type != params.compute_type:
+            if status_callback is not None:
+                status_callback(0.0, "Initializing Model..")
             self.update_model(params.model_size, params.compute_type, progress)
 
-        def progress_callback(progress_value):
+        def whisper_progress_callback(progress_value):
             progress(progress_value, desc="Transcribing..")
+            if progress_callback is not None:
+                progress_callback(progress_value)
+            if status_callback is not None:
+                status_callback(progress_value, "Transcribing..")
 
         result = self.model.transcribe(audio=audio,
                                        language=params.lang,
@@ -74,7 +81,7 @@ class WhisperInference(BaseTranscriptionPipeline):
                                        patience=params.patience,
                                        temperature=params.temperature,
                                        compression_ratio_threshold=params.compression_ratio_threshold,
-                                       progress_callback=progress_callback,)["segments"]
+                                       progress_callback=whisper_progress_callback,)["segments"]
         segments_result = []
         for segment in result:
             segments_result.append(Segment(

@@ -1,5 +1,9 @@
 import os
 import argparse
+import time
+from datetime import datetime, timezone
+from html import escape
+from pathlib import Path
 import gradio as gr
 from gradio_i18n import Translate, gettext as _
 import yaml
@@ -16,6 +20,7 @@ from modules.utils.youtube_manager import get_ytmetas
 from modules.translation.deepl_api import DeepLAPI
 from modules.whisper.data_classes import *
 from modules.utils.logger import get_logger
+from modules.utils.task_status_store import TaskStatusStore
 
 
 logger = get_logger()
@@ -41,6 +46,7 @@ class App:
         self.deepl_api = DeepLAPI(
             output_dir=os.path.join(self.args.output_dir, "translations")
         )
+        self.task_status_store = TaskStatusStore()
         self.i18n = load_yaml(I18N_YAML_PATH)
         self.default_params = load_yaml(DEFAULT_PARAMETERS_CONFIG_PATH)
         logger.info(f"Use \"{self.args.whisper_type}\" implementation\n"
@@ -95,6 +101,353 @@ class App:
             cb_timestamp
         )
 
+    def transcribe_file_with_task_tracking(self,
+                                           files=None,
+                                           input_folder_path: str | None = None,
+                                           include_subdirectory: bool | None = None,
+                                           save_same_dir: bool | None = None,
+                                           file_format: str = "SRT",
+                                           add_timestamp: bool = True,
+                                           progress=gr.Progress(),
+                                           *pipeline_params):
+        label = self.describe_file_source(files=files, input_folder_path=input_folder_path)
+        task_id = self.task_status_store.create_task(
+            task_type="transcription",
+            source_kind="file",
+            label=label,
+            message="Preparing transcription..",
+        )
+        started_at = time.monotonic()
+        self.task_status_store.update_task(task_id, status="in_progress")
+
+        try:
+            result_text, result_files = self.whisper_inf.transcribe_file(
+                files,
+                input_folder_path,
+                include_subdirectory,
+                save_same_dir,
+                file_format,
+                add_timestamp,
+                progress,
+                *pipeline_params,
+                status_callback=self.build_status_callback(task_id),
+            )
+        except Exception as error:
+            self.task_status_store.update_task(
+                task_id,
+                status="failed",
+                message="Transcription failed.",
+                error=str(error),
+                duration_seconds=time.monotonic() - started_at,
+                mark_finished=True,
+            )
+            raise
+
+        self.task_status_store.update_task(
+            task_id,
+            status="completed",
+            progress=1.0,
+            message="Completed.",
+            current_item="",
+            result_files=self.normalize_result_files(result_files),
+            duration_seconds=time.monotonic() - started_at,
+            mark_finished=True,
+        )
+        return result_text, result_files
+
+    def transcribe_youtube_with_task_tracking(self,
+                                              youtube_link: str,
+                                              file_format: str = "SRT",
+                                              add_timestamp: bool = True,
+                                              progress=gr.Progress(),
+                                              *pipeline_params):
+        label = youtube_link.strip() if youtube_link else "Youtube task"
+        task_id = self.task_status_store.create_task(
+            task_type="transcription",
+            source_kind="youtube",
+            label=label,
+            message="Preparing Youtube transcription..",
+        )
+        started_at = time.monotonic()
+        self.task_status_store.update_task(task_id, status="in_progress")
+
+        try:
+            result_text, result_file = self.whisper_inf.transcribe_youtube(
+                youtube_link,
+                file_format,
+                add_timestamp,
+                progress,
+                *pipeline_params,
+                status_callback=self.build_status_callback(task_id),
+            )
+        except Exception as error:
+            self.task_status_store.update_task(
+                task_id,
+                status="failed",
+                message="Youtube transcription failed.",
+                error=str(error),
+                duration_seconds=time.monotonic() - started_at,
+                mark_finished=True,
+            )
+            raise
+
+        self.task_status_store.update_task(
+            task_id,
+            status="completed",
+            progress=1.0,
+            message="Completed.",
+            current_item="",
+            result_files=self.normalize_result_files(result_file),
+            duration_seconds=time.monotonic() - started_at,
+            mark_finished=True,
+        )
+        return result_text, result_file
+
+    def transcribe_mic_with_task_tracking(self,
+                                          mic_audio: str,
+                                          file_format: str = "SRT",
+                                          add_timestamp: bool = True,
+                                          progress=gr.Progress(),
+                                          *pipeline_params):
+        task_id = self.task_status_store.create_task(
+            task_type="transcription",
+            source_kind="mic",
+            label="Microphone recording",
+            message="Preparing microphone transcription..",
+        )
+        started_at = time.monotonic()
+        self.task_status_store.update_task(task_id, status="in_progress")
+
+        try:
+            result_text, result_file = self.whisper_inf.transcribe_mic(
+                mic_audio,
+                file_format,
+                add_timestamp,
+                progress,
+                *pipeline_params,
+                status_callback=self.build_status_callback(task_id),
+            )
+        except Exception as error:
+            self.task_status_store.update_task(
+                task_id,
+                status="failed",
+                message="Microphone transcription failed.",
+                error=str(error),
+                duration_seconds=time.monotonic() - started_at,
+                mark_finished=True,
+            )
+            raise
+
+        self.task_status_store.update_task(
+            task_id,
+            status="completed",
+            progress=1.0,
+            message="Completed.",
+            current_item="",
+            result_files=self.normalize_result_files(result_file),
+            duration_seconds=time.monotonic() - started_at,
+            mark_finished=True,
+        )
+        return result_text, result_file
+
+    def build_status_callback(self, task_id: str):
+        state = {
+            "last_progress": None,
+            "last_message": None,
+            "last_item": None,
+            "last_write_at": 0.0,
+        }
+
+        def callback(progress_value: float | None, message: str, current_item: str | None = None):
+            now = time.monotonic()
+            normalized_progress = None if progress_value is None else round(float(progress_value), 4)
+            progress_changed = (
+                normalized_progress is not None and (
+                    state["last_progress"] is None or
+                    abs(normalized_progress - state["last_progress"]) >= 0.01 or
+                    normalized_progress >= 1.0
+                )
+            )
+            should_write = (
+                message != state["last_message"] or
+                current_item != state["last_item"] or
+                progress_changed or
+                now - state["last_write_at"] >= 2.0
+            )
+            if not should_write:
+                return
+
+            self.task_status_store.update_task(
+                task_id,
+                status="in_progress",
+                progress=normalized_progress,
+                message=message,
+                current_item=current_item,
+            )
+            state["last_progress"] = normalized_progress
+            state["last_message"] = message
+            state["last_item"] = current_item
+            state["last_write_at"] = now
+
+        return callback
+
+    def render_task_monitor_html(self) -> str:
+        tasks = self.task_status_store.list_tasks(limit=10)
+        active_statuses = {"queued", "in_progress"}
+        active_tasks = [task for task in tasks if task["status"] in active_statuses]
+        recent_tasks = [task for task in tasks if task["status"] not in active_statuses]
+
+        sections = [
+            '<div class="task-monitor">',
+            self.render_task_group(
+                title="Active Tasks",
+                tasks=active_tasks,
+                empty_message="No active transcription tasks. This panel refreshes automatically.",
+            ),
+        ]
+
+        if recent_tasks:
+            sections.append(
+                self.render_task_group(
+                    title="Recent Tasks",
+                    tasks=recent_tasks,
+                    empty_message="",
+                )
+            )
+
+        sections.append("</div>")
+        return "".join(sections)
+
+    def render_task_group(self, title: str, tasks: list[dict], empty_message: str) -> str:
+        if not tasks:
+            return (
+                '<section class="task-monitor__section">'
+                f'<div class="task-monitor__title">{escape(title)}</div>'
+                f'<div class="task-monitor__empty">{escape(empty_message)}</div>'
+                "</section>"
+            )
+
+        cards = "".join(self.render_task_card(task) for task in tasks)
+        return (
+            '<section class="task-monitor__section">'
+            f'<div class="task-monitor__title">{escape(title)}</div>'
+            f'<div class="task-monitor__cards">{cards}</div>'
+            "</section>"
+        )
+
+    def render_task_card(self, task: dict) -> str:
+        status = task["status"]
+        progress = task.get("progress")
+        progress_html = ""
+        if progress is not None:
+            progress_percent = round(progress * 100)
+            progress_html = (
+                '<div class="task-monitor__progress">'
+                '<div class="task-monitor__progress-track">'
+                f'<span class="task-monitor__progress-fill" style="width: {progress_percent}%;"></span>'
+                "</div>"
+                f'<div class="task-monitor__progress-text">{progress_percent}%</div>'
+                "</div>"
+            )
+
+        details = []
+        if task.get("message"):
+            details.append(f'<div class="task-monitor__message">{escape(task["message"])}</div>')
+
+        outputs = task.get("result_files") or []
+        if outputs:
+            rendered_outputs = ", ".join(escape(Path(item).name) for item in outputs[:3])
+            if len(outputs) > 3:
+                rendered_outputs += f" (+{len(outputs) - 3} more)"
+            details.append(f'<div class="task-monitor__meta">Outputs: {rendered_outputs}</div>')
+
+        if task.get("error"):
+            details.append(f'<div class="task-monitor__meta">Error: {escape(task["error"])}</div>')
+
+        details.append(
+            f'<div class="task-monitor__meta">Updated {escape(self.format_relative_time(task["updated_at"]))}</div>'
+        )
+        if task.get("duration_seconds"):
+            details.append(
+                f'<div class="task-monitor__meta">Duration {escape(self.format_duration(task["duration_seconds"]))}</div>'
+            )
+
+        return (
+            f'<article class="task-monitor__card task-monitor__card--{escape(status)}">'
+            '<div class="task-monitor__card-header">'
+            f'<span class="task-monitor__badge task-monitor__badge--{escape(status)}">{escape(status.replace("_", " "))}</span>'
+            f'<span class="task-monitor__source">{escape(task["source_kind"])}</span>'
+            "</div>"
+            f'<div class="task-monitor__label">{escape(task["current_item"] or task["label"])}</div>'
+            f"{progress_html}"
+            f'{"".join(details)}'
+            "</article>"
+        )
+
+    @staticmethod
+    def describe_file_source(files=None, input_folder_path: str | None = None) -> str:
+        if input_folder_path:
+            return f"Folder: {Path(input_folder_path).name or input_folder_path}"
+
+        file_names = []
+        for file in files or []:
+            if hasattr(file, "name"):
+                file_names.append(Path(file.name).name)
+            else:
+                file_names.append(Path(str(file)).name)
+
+        if not file_names:
+            return "Uploaded files"
+        if len(file_names) == 1:
+            return file_names[0]
+        return f"{file_names[0]} (+{len(file_names) - 1} more)"
+
+    @staticmethod
+    def normalize_result_files(result_files) -> list[str]:
+        if result_files is None:
+            return []
+        if isinstance(result_files, list):
+            return [str(item) for item in result_files]
+        return [str(result_files)]
+
+    @staticmethod
+    def format_relative_time(value: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return value
+
+        delta_seconds = max(0, int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
+        if delta_seconds < 5:
+            return "just now"
+        if delta_seconds < 60:
+            return f"{delta_seconds}s ago"
+
+        minutes, seconds = divmod(delta_seconds, 60)
+        if minutes < 60:
+            return f"{minutes}m {seconds}s ago"
+
+        hours, minutes = divmod(minutes, 60)
+        if hours < 24:
+            return f"{hours}h {minutes}m ago"
+
+        days, hours = divmod(hours, 24)
+        return f"{days}d {hours}h ago"
+
+    @staticmethod
+    def format_duration(duration_seconds: float) -> str:
+        total_seconds = max(0, int(round(duration_seconds)))
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+
+        if hours:
+            return f"{hours}h {minutes}m {seconds}s"
+        if minutes:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
+
     def launch(self):
         translation_params = self.default_params["translation"]
         deepl_params = translation_params["deepl"]
@@ -110,6 +463,9 @@ class App:
                 with gr.Row():
                     with gr.Column():
                         gr.Markdown(MARKDOWN, elem_id="md_project")
+                        with gr.Accordion("Task Monitor", open=True):
+                            task_monitor = gr.HTML()
+                            task_monitor_refresh = gr.Timer(value=2, active=True)
                 with gr.Tabs():
                     with gr.TabItem(_("File")):  # tab1
                         with gr.Column():
@@ -140,7 +496,7 @@ class App:
                         params = [input_file, tb_input_folder, cb_include_subdirectory, cb_save_same_dir,
                                   dd_file_format, cb_timestamp]
                         params = params + pipeline_params
-                        btn_run.click(fn=self.whisper_inf.transcribe_file,
+                        btn_run.click(fn=self.transcribe_file_with_task_tracking,
                                       inputs=params,
                                       outputs=[tb_indicator, files_subtitles])
                         btn_openfolder.click(fn=lambda: self.open_folder("outputs"), inputs=None, outputs=None)
@@ -166,7 +522,7 @@ class App:
 
                         params = [tb_youtubelink, dd_file_format, cb_timestamp]
 
-                        btn_run.click(fn=self.whisper_inf.transcribe_youtube,
+                        btn_run.click(fn=self.transcribe_youtube_with_task_tracking,
                                       inputs=params + pipeline_params,
                                       outputs=[tb_indicator, files_subtitles])
                         tb_youtubelink.change(get_ytmetas, inputs=[tb_youtubelink],
@@ -189,7 +545,7 @@ class App:
 
                         params = [mic_input, dd_file_format, cb_timestamp]
 
-                        btn_run.click(fn=self.whisper_inf.transcribe_mic,
+                        btn_run.click(fn=self.transcribe_mic_with_task_tracking,
                                       inputs=params + pipeline_params,
                                       outputs=[tb_indicator, files_subtitles])
                         btn_openfolder.click(fn=lambda: self.open_folder("outputs"), inputs=None, outputs=None)
@@ -302,6 +658,21 @@ class App:
                                                      fn=lambda: self.open_folder(os.path.join(
                                                          self.args.output_dir, "UVR", "vocals"
                                                      )))
+
+            self.app.load(
+                fn=self.render_task_monitor_html,
+                inputs=None,
+                outputs=task_monitor,
+                queue=False,
+                show_progress="hidden",
+            )
+            task_monitor_refresh.tick(
+                fn=self.render_task_monitor_html,
+                inputs=None,
+                outputs=task_monitor,
+                queue=False,
+                show_progress="hidden",
+            )
 
         # Launch the app with optional gradio settings
         args = self.args
