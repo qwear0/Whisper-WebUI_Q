@@ -426,6 +426,7 @@ def generate_file(
 ) -> Tuple[str, str]:
     output_format = output_format.strip().lower().replace(".", "")
     output_format = "vtt" if output_format == "webvtt" else output_format
+    os.makedirs(output_dir, exist_ok=True)
 
     if add_timestamp:
         timestamp = datetime.now().strftime("%m%d%H%M%S")

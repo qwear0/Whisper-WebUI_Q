@@ -11,6 +11,7 @@ services:
       - ./models:/Whisper-WebUI/models
       - ./outputs:/Whisper-WebUI/outputs
       - ./configs:/Whisper-WebUI/configs
+      - /data/ObsidianVault/Inner/AI/Whisper_Results:/data/ObsidianVault/Inner/AI/Whisper_Results
 
     ports:
       - "7860:7860"
@@ -19,4 +20,3 @@ services:
     tty: true
 
     entrypoint: ["python", "app.py", "--server_port", "7860", "--server_name", "0.0.0.0",]
-

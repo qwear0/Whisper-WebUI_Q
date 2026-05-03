@@ -238,6 +238,7 @@ class BaseTranscriptionPipeline(ABC):
                         save_same_dir: Optional[str] = None,
                         file_format: str = "SRT",
                         add_timestamp: bool = True,
+                        output_dir: Optional[str] = None,
                         progress=gr.Progress(),
                         *pipeline_params,
                         status_callback: Optional[Callable] = None,
@@ -262,6 +263,8 @@ class BaseTranscriptionPipeline(ABC):
             Subtitle File format to write from gr.Dropdown(). Supported format: [SRT, WebVTT, txt]
         add_timestamp: bool
             Boolean value from gr.Checkbox() that determines whether to add a timestamp at the end of the subtitle filename.
+        output_dir: Optional[str]
+            Directory path where the subtitle files will be written. If empty, the default output directory is used.
         progress: gr.Progress
             Indicator to show progress directly in gradio.
         *pipeline_params: tuple
@@ -292,6 +295,11 @@ class BaseTranscriptionPipeline(ABC):
                 files = [file.name for file in files]
             if not files:
                 raise ValueError("No input files provided")
+
+            selected_output_dir = self.output_dir
+            if output_dir and output_dir.strip():
+                selected_output_dir = os.path.abspath(os.path.expanduser(output_dir.strip()))
+            os.makedirs(selected_output_dir, exist_ok=True)
 
             files_info = {}
             total_files = len(files)
@@ -328,9 +336,9 @@ class BaseTranscriptionPipeline(ABC):
 
                 file_name, file_ext = os.path.splitext(os.path.basename(file))
                 if save_same_dir and input_folder_path:
-                    output_dir = os.path.dirname(file)
+                    same_dir_output_dir = os.path.dirname(file)
                     subtitle, file_path = generate_file(
-                        output_dir=output_dir,
+                        output_dir=same_dir_output_dir,
                         output_file_name=file_name,
                         output_format=file_format,
                         result=transcribed_segments,
@@ -339,7 +347,7 @@ class BaseTranscriptionPipeline(ABC):
                     )
 
                 subtitle, file_path = generate_file(
-                    output_dir=self.output_dir,
+                    output_dir=selected_output_dir,
                     output_file_name=file_name,
                     output_format=file_format,
                     result=transcribed_segments,
@@ -362,7 +370,7 @@ class BaseTranscriptionPipeline(ABC):
                 total_result += f'{info["subtitle"]}'
                 total_time += info["time_for_task"]
 
-            result_str = f"Done in {self.format_time(total_time)}! Subtitle is in the outputs folder.\n\n{total_result}"
+            result_str = f"Done in {self.format_time(total_time)}! Subtitle is in {selected_output_dir}.\n\n{total_result}"
             result_file_path = [info['path'] for info in files_info.values()]
 
             return result_str, result_file_path

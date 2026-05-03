@@ -59,12 +59,24 @@ class App:
         uvr_params = self.default_params["bgm_separation"]
 
         with gr.Row():
-            dd_model = gr.Dropdown(choices=self.whisper_inf.available_models, value=whisper_params["model_size"],
-                                   label=_("Model"), allow_custom_value=True)
-            dd_lang = gr.Dropdown(choices=self.whisper_inf.available_langs + [AUTOMATIC_DETECTION],
-                                  value=AUTOMATIC_DETECTION if whisper_params["lang"] == AUTOMATIC_DETECTION.unwrap()
-                                  else whisper_params["lang"], label=_("Language"))
-            dd_file_format = gr.Dropdown(choices=["SRT", "WebVTT", "txt", "LRC"], value=whisper_params["file_format"], label=_("File Format"))
+            with gr.Column():
+                dd_model = gr.Dropdown(choices=self.whisper_inf.available_models, value=whisper_params["model_size"],
+                                       label=_("Model"), allow_custom_value=True)
+                tb_output_dir = gr.Textbox(
+                    label="Output Path",
+                    value="/data/ObsidianVault/Inner/AI/Whisper_Results",
+                    placeholder=self.args.output_dir,
+                )
+            with gr.Column():
+                dd_lang = gr.Dropdown(choices=self.whisper_inf.available_langs + [AUTOMATIC_DETECTION],
+                                      value=AUTOMATIC_DETECTION if whisper_params["lang"] == AUTOMATIC_DETECTION.unwrap()
+                                      else whisper_params["lang"], label=_("Language"))
+            with gr.Column():
+                dd_file_format = gr.Dropdown(
+                    choices=["SRT", "WebVTT", "txt", "LRC"],
+                    value=whisper_params["file_format"],
+                    label=_("File Format")
+                )
         with gr.Row():
             cb_translate = gr.Checkbox(value=whisper_params["is_translate"], label=_("Translate to English?"),
                                        interactive=True)
@@ -98,7 +110,8 @@ class App:
         return (
             pipeline_inputs,
             dd_file_format,
-            cb_timestamp
+            cb_timestamp,
+            tb_output_dir,
         )
 
     def transcribe_file_with_task_tracking(self,
@@ -108,6 +121,7 @@ class App:
                                            save_same_dir: bool | None = None,
                                            file_format: str = "SRT",
                                            add_timestamp: bool = True,
+                                           output_dir: str | None = None,
                                            progress=gr.Progress(),
                                            *pipeline_params):
         label = self.describe_file_source(files=files, input_folder_path=input_folder_path)
@@ -128,6 +142,7 @@ class App:
                 save_same_dir,
                 file_format,
                 add_timestamp,
+                output_dir,
                 progress,
                 *pipeline_params,
                 status_callback=self.build_status_callback(task_id),
@@ -303,6 +318,7 @@ class App:
                 title="Active Tasks",
                 tasks=active_tasks,
                 empty_message="No active transcription tasks. This panel refreshes automatically.",
+                section_kind="active",
             ),
         ]
 
@@ -312,16 +328,27 @@ class App:
                     title="Recent Tasks",
                     tasks=recent_tasks,
                     empty_message="",
+                    section_kind="recent",
                 )
             )
 
         sections.append("</div>")
         return "".join(sections)
 
-    def render_task_group(self, title: str, tasks: list[dict], empty_message: str) -> str:
+    def render_task_group(
+        self,
+        title: str,
+        tasks: list[dict],
+        empty_message: str,
+        section_kind: str = "default",
+    ) -> str:
+        section_class = "task-monitor__section"
+        if section_kind:
+            section_class += f" task-monitor__section--{section_kind}"
+
         if not tasks:
             return (
-                '<section class="task-monitor__section">'
+                f'<section class="{section_class}">'
                 f'<div class="task-monitor__title">{escape(title)}</div>'
                 f'<div class="task-monitor__empty">{escape(empty_message)}</div>'
                 "</section>"
@@ -329,7 +356,7 @@ class App:
 
         cards = "".join(self.render_task_card(task) for task in tasks)
         return (
-            '<section class="task-monitor__section">'
+            f'<section class="{section_class}">'
             f'<div class="task-monitor__title">{escape(title)}</div>'
             f'<div class="task-monitor__cards">{cards}</div>'
             "</section>"
@@ -462,7 +489,7 @@ class App:
                             task_monitor = gr.HTML()
                             task_monitor_refresh = gr.Timer(value=2, active=True)
                 with gr.Column():
-                    with gr.Row():
+                    with gr.Row(visible=False):
                         tb_indicator = gr.Textbox(label=_("Output"), scale=5)
                         files_subtitles = gr.Files(label=_("Downloadable output file"), scale=3, interactive=False)
                         btn_openfolder = gr.Button('📂', scale=1)
@@ -487,10 +514,10 @@ class App:
                                                    visible=self.args.colab,
                                                    value=True)
 
-                    pipeline_params, dd_file_format, cb_timestamp = self.create_pipeline_inputs()
+                    pipeline_params, dd_file_format, cb_timestamp, tb_output_dir = self.create_pipeline_inputs()
 
                     params = [input_file, tb_input_folder, cb_include_subdirectory, cb_save_same_dir,
-                              dd_file_format, cb_timestamp]
+                              dd_file_format, cb_timestamp, tb_output_dir]
                     params = params + pipeline_params
                     btn_run.click(fn=self.transcribe_file_with_task_tracking,
                                   inputs=params,

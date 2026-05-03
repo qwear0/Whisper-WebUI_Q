@@ -66,6 +66,17 @@ CSS = """
     background: #fafafa;
 }
 
+.task-monitor__section--recent .task-monitor__card {
+    border-color: #2b3444;
+    background: linear-gradient(180deg, #1a2230 0%, #111923 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.task-monitor__section--recent .task-monitor__title,
+.task-monitor__section--recent .task-monitor__label {
+    color: #f3f6fb;
+}
+
 .task-monitor__card-header {
     display: flex;
     align-items: center;
@@ -106,10 +117,42 @@ CSS = """
     color: #9f1d2d;
 }
 
+.task-monitor__section--recent .task-monitor__badge {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.task-monitor__section--recent .task-monitor__badge--queued {
+    background: rgba(255, 196, 87, 0.16);
+    color: #ffd58a;
+}
+
+.task-monitor__section--recent .task-monitor__badge--in_progress {
+    background: rgba(88, 183, 255, 0.16);
+    color: #8cd0ff;
+}
+
+.task-monitor__section--recent .task-monitor__badge--completed {
+    background: rgba(83, 198, 128, 0.16);
+    color: #8be0a8;
+}
+
+.task-monitor__section--recent .task-monitor__badge--failed {
+    background: rgba(255, 112, 132, 0.16);
+    color: #ff9bab;
+}
+
 .task-monitor__source {
     font-size: 12px;
     color: #666;
     text-transform: capitalize;
+}
+
+.task-monitor__section--recent .task-monitor__source,
+.task-monitor__section--recent .task-monitor__message,
+.task-monitor__section--recent .task-monitor__meta,
+.task-monitor__section--recent .task-monitor__empty,
+.task-monitor__section--recent .task-monitor__progress-text {
+    color: #9eabbe;
 }
 
 .task-monitor__label {
@@ -137,6 +180,10 @@ CSS = """
     background: #ececec;
     border-radius: 999px;
     overflow: hidden;
+}
+
+.task-monitor__section--recent .task-monitor__progress-track {
+    background: #243041;
 }
 
 .task-monitor__progress-fill {
