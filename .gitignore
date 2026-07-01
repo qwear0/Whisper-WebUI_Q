@@ -12,3 +12,4 @@ configs/
 outputs/
 models/
 modules/yt_tmp.wav
+tmp/plans/

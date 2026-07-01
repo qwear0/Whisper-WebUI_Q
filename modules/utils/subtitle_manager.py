@@ -9,6 +9,7 @@ from typing import Callable, List, Optional, TextIO, Union, Dict, Tuple
 from datetime import datetime
 
 from modules.whisper.data_classes import Segment, Word
+from .filename import safe_filename
 from .files_manager import read_file
 
 
@@ -77,7 +78,7 @@ class ResultWriter:
         self, result: Union[dict, List[Segment]], output_file_name: str,
             options: Optional[dict] = None, **kwargs
     ):
-        if isinstance(result, List) and result and isinstance(result[0], Segment):
+        if isinstance(result, List) and (not result or isinstance(result[0], Segment)):
             result = {"segments": [seg.model_dump() for seg in result]}
 
         output_path = os.path.join(
@@ -441,18 +442,3 @@ def generate_file(
     file_writer(result=result, output_file_name=output_file_name, **kwargs)
     content = read_file(file_path)
     return content, file_path
-
-
-def safe_filename(name):
-    INVALID_FILENAME_CHARS = r'[<>:"/\\|?*\x00-\x1f]'
-    MAX_FILENAME_LENGTH = 200
-    safe_name = re.sub(INVALID_FILENAME_CHARS, '_', name)
-    # Truncate the filename if it exceeds the max_length (MAX_FILENAME_LENGTH)
-    if len(safe_name) > MAX_FILENAME_LENGTH:
-        file_extension = safe_name.split('.')[-1]
-        if len(file_extension) + 1 < MAX_FILENAME_LENGTH:
-            truncated_name = safe_name[:MAX_FILENAME_LENGTH - len(file_extension) - 1]
-            safe_name = truncated_name + '.' + file_extension
-        else:
-            safe_name = safe_name[:MAX_FILENAME_LENGTH]
-    return safe_name

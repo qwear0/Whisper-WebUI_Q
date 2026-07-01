@@ -70,6 +70,28 @@ docker compose up
 
 5. Connect to the WebUI with your browser at `http://localhost:7860`
 
+ElevenLabs is the default provider for uploaded files, with speaker diarization enabled
+by default. Put one or more keys in the repository-root `.env`; keys are tried in
+numeric order and are never sent to the browser:
+
+```dotenv
+ELEVEN_LABS_KEY_1=your-key
+ELEVEN_LABS_KEY_2=another-key
+```
+
+Docker Compose loads this `.env` file into the container. Do not commit it. When every
+configured key is unavailable or ElevenLabs remains unavailable after bounded retries,
+the complete source file is transcribed by Whisper. You can also select Whisper directly
+under the `Транскрибация` button. Files longer than the safe 8-hour request target are
+converted to sequential mono 16 kHz FLAC chunks with a 2-second overlap. The overlap is
+billed twice by ElevenLabs, and transient retries may also consume credits.
+The implementation stays below ElevenLabs' documented 10-hour duration limit and uses
+3 GB as a conservative hard upload ceiling (their current documentation is inconsistent
+between 3 GB and 5 GB).
+For diarized chunked files, labels use `SPEAKER_00|text`; because each chunk is
+diarized independently, the same physical voice cannot be guaranteed to retain the
+same label across every boundary without a separate speaker-matching model.
+
 If needed, update the [`docker-compose.yaml`](https://github.com/jhj0517/Whisper-WebUI/blob/master/docker-compose.yaml) to match your environment.
 
 - ## Run Locally
@@ -119,6 +141,9 @@ Alternatively, if you enter the huggingface repo id (e.g, [deepdml/faster-whispe
 
 # REST API
 If you're interested in deploying this app as a REST API, please check out [/backend](https://github.com/jhj0517/Whisper-WebUI/tree/master/backend).
+
+The in-process QSD adapter accepts an optional multipart `provider` field on
+`POST /qsd/transcriptions`. Valid values are `elevenlabs` (the default) and `whisper`.
 
 ## TODO🗓
 

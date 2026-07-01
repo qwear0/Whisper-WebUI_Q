@@ -3,6 +3,7 @@ import whisper
 import ctranslate2
 import gradio as gr
 import torchaudio
+import torch
 from abc import ABC, abstractmethod
 from typing import BinaryIO, Union, Tuple, List, Callable, Optional
 import numpy as np
@@ -238,9 +239,9 @@ class BaseTranscriptionPipeline(ABC):
                         save_same_dir: Optional[str] = None,
                         file_format: str = "SRT",
                         add_timestamp: bool = True,
-                        output_dir: Optional[str] = None,
                         progress=gr.Progress(),
                         *pipeline_params,
+                        output_dir: Optional[str] = None,
                         status_callback: Optional[Callable] = None,
                         ) -> Tuple[str, List]:
         """
@@ -263,12 +264,12 @@ class BaseTranscriptionPipeline(ABC):
             Subtitle File format to write from gr.Dropdown(). Supported format: [SRT, WebVTT, txt]
         add_timestamp: bool
             Boolean value from gr.Checkbox() that determines whether to add a timestamp at the end of the subtitle filename.
-        output_dir: Optional[str]
-            Directory path where the subtitle files will be written. If empty, the default output directory is used.
         progress: gr.Progress
             Indicator to show progress directly in gradio.
         *pipeline_params: tuple
             Parameters for the transcription pipeline. This will be dealt with "TranscriptionPipelineParams" data class
+        output_dir: Optional[str]
+            Directory path where the subtitle files will be written. If empty, the default output directory is used.
 
         Returns
         ----------

@@ -1,7 +1,6 @@
 import os
 import fnmatch
 from ruamel.yaml import YAML
-from gradio.utils import NamedString
 
 from modules.utils.paths import DEFAULT_PARAMETERS_CONFIG_PATH
 
@@ -85,6 +84,8 @@ def get_media_files(folder_path, include_sub_directory=False):
 def format_gradio_files(files: list):
     if not files:
         return files
+
+    from gradio.utils import NamedString
 
     gradio_files = []
     for file in files:

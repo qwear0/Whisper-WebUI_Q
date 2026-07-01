@@ -15,6 +15,11 @@ torchaudio>=2.8.0,<2.9.0 # 2.9 deprecates used functions
 git+https://github.com/jhj0517/jhj0517-whisper.git
 faster-whisper==1.1.1
 transformers==4.47.1
+fastapi
+uvicorn
+python-multipart
+httpx==0.28.1
+python-dotenv==1.1.0
 gradio==5.29.0
 gradio-i18n==0.3.1
 pytubefix
