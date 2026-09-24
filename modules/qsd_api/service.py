@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import threading
 import time
@@ -7,6 +8,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
 
@@ -19,7 +21,12 @@ from modules.qsd_api.schemas import (
     TranscriptionListResponse,
     TranscriptionStatusResponse,
 )
-from modules.elevenlabs_transcription.models import TranscriptionProvider
+from modules.elevenlabs_transcription.client import ElevenLabsPreflightError
+from modules.elevenlabs_transcription.models import (
+    ElevenLabsProviderError,
+    ElevenLabsValidationError,
+    TranscriptionProvider,
+)
 from modules.utils.files_manager import AUDIO_EXTENSION
 from modules.utils.filename import safe_filename
 from modules.utils.paths import OUTPUT_DIR
@@ -38,6 +45,7 @@ class QSDTranscriptionService:
         self.upload_root.mkdir(parents=True, exist_ok=True)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qsd-whisper")
         self._schedule_lock = threading.Lock()
+        self._admission_pending = False
         self._futures: dict[str, Future] = {}
         self._futures_lock = threading.Lock()
 
@@ -72,83 +80,93 @@ class QSDTranscriptionService:
             ) from error
 
         with self._schedule_lock:
-            active_tasks = self.store.list_active_tasks(limit=1)
-            if active_tasks:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Transcription worker is busy.",
-                )
+            if self._admission_pending or self.store.list_active_tasks(limit=1):
+                raise HTTPException(status_code=409, detail="Transcription worker is busy.")
+            self._admission_pending = True
 
-            task_id = self.store.create_task(
-                task_type="transcription",
-                source_kind="qsd_api",
-                label=Path(upload_file.filename or "upload").name,
-                message="Queued.",
-                external_request_id=request_id,
-                requested_provider=requested_provider.value,
-            )
-
+        staging_id = str(uuid4())
+        task_id: str | None = None
         try:
-            input_path = await self._save_upload(task_id=task_id, upload_file=upload_file)
-        except HTTPException:
-            raise
+            input_path = await self._save_upload(task_id=staging_id, upload_file=upload_file)
+            if requested_provider is TranscriptionProvider.ELEVENLABS:
+                # Keep admission reserved while the bounded executor runs this blocking HTTP preflight.
+                await asyncio.get_running_loop().run_in_executor(
+                    self.executor, self._check_provider_preflight, input_path,
+                )
+            with self._schedule_lock:
+                if self.store.list_active_tasks(limit=1):
+                    raise HTTPException(status_code=409, detail="Transcription worker is busy.")
+                task_id = self.store.create_task(
+                    task_type="transcription", source_kind="qsd_api",
+                    label=Path(upload_file.filename or "upload").name,
+                    message="Queued.", external_request_id=request_id,
+                    requested_provider=requested_provider.value,
+                )
+                task_dir = self.upload_root / task_id
+                input_path.parent.rename(task_dir)
+                input_path = task_dir / input_path.name
         except Exception as error:
-            task_dir = self.upload_root / task_id
-            if task_dir.exists() and task_dir.is_dir() and task_dir.parent == self.upload_root:
-                shutil.rmtree(task_dir, ignore_errors=True)
-            self.store.update_task(
-                task_id,
-                status="failed",
-                message="Failed to save upload.",
-                error=str(error),
-                mark_finished=True,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to save upload.",
-            ) from error
-        selected_output_dir = self._select_output_dir(output_dir)
+            self._cleanup_upload(self.upload_root / staging_id / "upload")
+            if task_id is not None:
+                self.store.update_task(task_id, status="failed", message="Failed to stage upload.", error=str(error), mark_finished=True)
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(status_code=500, detail="Failed to save upload.") from error
+        finally:
+            with self._schedule_lock:
+                self._admission_pending = False
 
+        selected_output_dir = self._select_output_dir(output_dir)
         try:
             future = self.executor.submit(
-                self._run_transcription,
-                task_id,
-                input_path,
-                selected_output_dir,
-                requested_provider,
+                self._run_transcription, task_id, input_path, selected_output_dir, requested_provider,
             )
         except RuntimeError as error:
-            self.store.update_task(
-                task_id,
-                status="failed",
-                message="Failed to schedule transcription.",
-                error=str(error),
-                mark_finished=True,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Failed to schedule transcription.",
-            ) from error
-
+            self.store.update_task(task_id, status="failed", message="Failed to schedule transcription.", error=str(error), mark_finished=True)
+            raise HTTPException(status_code=503, detail="Failed to schedule transcription.") from error
         with self._futures_lock:
             self._futures[task_id] = future
-
         task = self.store.get_task(task_id)
         if task is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Task was not created.",
-            )
-
+            raise HTTPException(status_code=500, detail="Task was not created.")
         progress = task["progress"] if task["progress"] is not None else 0.0
         return TranscriptionCreateResponse(
-            task_id=task_id,
-            status=task["status"],
-            progress=progress,
+            task_id=task_id, status=task["status"], progress=progress,
             progress_percent=self._progress_percent(progress),
-            status_url=f"/qsd/transcriptions/{task_id}",
-            requested_provider=requested_provider.value,
+            status_url=f"/qsd/transcriptions/{task_id}", requested_provider=requested_provider.value,
         )
+
+    def _check_provider_preflight(self, input_path: Path) -> None:
+        try:
+            duration_seconds = self.app.elevenlabs_pipeline.chunker.probe(input_path).duration
+        except ElevenLabsValidationError as error:
+            raise HTTPException(status_code=422, detail="Could not determine valid audio duration.") from error
+        try:
+            # This estimate is advisory: vendor pricing and per-key limits are not quoted here.
+            self.app.elevenlabs_pipeline.client.ensure_usable_key(duration_seconds=duration_seconds)
+        except ElevenLabsPreflightError as error:
+            if error.code == "insufficient_credits":
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail={"code": "insufficient_credits", "message": str(error)},
+                ) from error
+            if error.code == "no_usable_key":
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "no_usable_key", "message": str(error)},
+                ) from error
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "provider_preflight_unavailable",
+                    "message": "Could not verify ElevenLabs API key access.",
+                },
+            ) from error
+        except ElevenLabsProviderError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "provider_preflight_unavailable", "message": str(error)},
+            ) from error
 
     def get_transcription(self, task_id: str) -> TranscriptionStatusResponse:
         task = self.store.get_task(task_id)
@@ -231,6 +249,7 @@ class QSDTranscriptionService:
                 pipeline_params=pipeline_params,
                 elevenlabs_settings=elevenlabs_settings,
                 status_callback=self._build_status_callback(task_id),
+                allow_whisper_fallback=False,
             )
 
             if self.store.is_cancel_requested(task_id):
@@ -306,13 +325,7 @@ class QSDTranscriptionService:
 
         if target_path.stat().st_size == 0:
             self._cleanup_upload(target_path)
-            self.store.update_task(
-                task_id,
-                status="failed",
-                message="Upload file is empty.",
-                error="Upload file is empty.",
-                mark_finished=True,
-            )
+            # Staging has no task record yet; known rejects must leave no task.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Upload file is empty.",

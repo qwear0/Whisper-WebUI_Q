@@ -58,6 +58,33 @@ def test_explicit_whisper_dispatch_uses_existing_pipeline(tmp_path: Path):
     assert len(calls) == 1
 
 
+def test_elevenlabs_dispatch_can_disable_whisper_fallback(tmp_path: Path):
+    instance = bare_app(tmp_path)
+    calls = []
+
+    class FakeElevenLabsPipeline:
+        def transcribe_files(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return "elevenlabs", [str(tmp_path / "result.txt")], "elevenlabs"
+
+    instance.elevenlabs_pipeline = FakeElevenLabsPipeline()
+
+    instance.transcribe_files_by_provider(
+        files=[str(tmp_path / "source.wav")],
+        provider="elevenlabs",
+        file_format="txt",
+        add_timestamp=False,
+        output_dir=str(tmp_path),
+        progress=None,
+        pipeline_params=[],
+        elevenlabs_settings=ElevenLabsSettings(),
+        allow_whisper_fallback=False,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["fallback"] is None
+
+
 def test_folder_input_is_rejected_before_elevenlabs_dispatch(tmp_path: Path):
     instance = bare_app(tmp_path)
     instance.elevenlabs_pipeline = SimpleNamespace(

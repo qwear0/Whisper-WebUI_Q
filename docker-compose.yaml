@@ -26,4 +26,12 @@ services:
     stdin_open: true
     tty: true
 
+    networks:
+      - default
+      - enigma_control_plane
+
     entrypoint: ["python", "app.py", "--server_port", "7860", "--server_name", "0.0.0.0",]
+
+networks:
+  enigma_control_plane:
+    external: true

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import email.utils
+import math
 import mimetypes
 import os
 import random
@@ -23,7 +24,14 @@ from .models import (
 
 
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_SUBSCRIPTION_URL = "https://api.elevenlabs.io/v1/user/subscription"
 KEY_PATTERN = re.compile(r"^ELEVEN_LABS_KEY_([1-9][0-9]*)$")
+
+
+class ElevenLabsPreflightError(ElevenLabsProviderError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def discover_numbered_keys(environment: Mapping[str, str] | None = None) -> list[str]:
@@ -64,6 +72,91 @@ class ElevenLabsClient:
     @property
     def key_count(self) -> int:
         return len(self._keys)
+
+    def ensure_usable_key(self, *, duration_seconds: float | None = None) -> None:
+        """Estimate affordability for an uploaded recording; provider limits are not exact quotes."""
+        estimated_credits = None
+        if duration_seconds is not None:
+            if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+                raise ValueError("Audio duration must be finite and positive.")
+            estimated_credits = math.ceil(duration_seconds * 4_000 * 1.2 / 3_600)
+        available = self._available_key_indices()
+        if not available:
+            raise ElevenLabsPreflightError("no_usable_key", "No usable ElevenLabs API key is configured.")
+
+        exhausted_subscription_seen = False
+        for key_index in available:
+            try:
+                response = self._get_subscription(self._keys[key_index])
+            except httpx.HTTPError as error:
+                raise ElevenLabsProviderError("Could not verify ElevenLabs API key access.") from error
+
+            if response.is_success:
+                if self._subscription_is_exhausted_without_extension(response):
+                    exhausted_subscription_seen = True
+                    continue
+                remaining_credits = self._remaining_fixed_credits(response)
+                if estimated_credits is not None and remaining_credits is not None and remaining_credits < estimated_credits:
+                    exhausted_subscription_seen = True
+                    continue
+                self._active_index = key_index
+                return
+            if response.status_code == 402:
+                exhausted_subscription_seen = True
+                continue
+            if response.status_code in {401, 403}:
+                self._disabled_indices.add(key_index)
+                continue
+            raise ElevenLabsProviderError(
+                f"Could not verify ElevenLabs API key access (HTTP {response.status_code})."
+            )
+
+        if exhausted_subscription_seen:
+            raise ElevenLabsPreflightError(
+                "insufficient_credits",
+                "ElevenLabs reported insufficient credits.",
+            )
+        raise ElevenLabsPreflightError("no_usable_key", "No usable ElevenLabs API key is configured.")
+
+    @staticmethod
+    def _subscription_is_exhausted_without_extension(response: httpx.Response) -> bool:
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+
+        character_count = payload.get("character_count")
+        character_limit = payload.get("character_limit")
+        return (
+            isinstance(character_count, (int, float))
+            and not isinstance(character_count, bool)
+            and isinstance(character_limit, (int, float))
+            and not isinstance(character_limit, bool)
+            and character_count >= character_limit
+            and payload.get("can_extend_character_limit") is False
+            and payload.get("allowed_to_extend_character_limit") is False
+        )
+
+    @staticmethod
+    def _remaining_fixed_credits(response: httpx.Response) -> float | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        used = payload.get("character_count")
+        limit = payload.get("character_limit")
+        if (not isinstance(used, (int, float)) or isinstance(used, bool)
+                or not isinstance(limit, (int, float)) or isinstance(limit, bool)
+                or not math.isfinite(used) or not math.isfinite(limit)
+                or used < 0 or limit < 0
+                or payload.get("can_extend_character_limit") is not False
+                or payload.get("allowed_to_extend_character_limit") is not False):
+            return None
+        return max(0.0, limit - used)
 
     def transcribe(self, file_path: str | Path, settings: ElevenLabsSettings) -> TranscriptResponse:
         path = Path(file_path)
@@ -130,6 +223,11 @@ class ElevenLabsClient:
             return []
         ordered = list(range(self._active_index, len(self._keys))) + list(range(0, self._active_index))
         return [index for index in ordered if index not in self._disabled_indices]
+
+    def _get_subscription(self, key: str) -> httpx.Response:
+        timeout = httpx.Timeout(connect=20.0, read=20.0, write=20.0, pool=20.0)
+        with httpx.Client(timeout=timeout, transport=self._transport) as client:
+            return client.get(ELEVENLABS_SUBSCRIPTION_URL, headers={"xi-api-key": key})
 
     def _post(self, key: str, path: Path, settings: ElevenLabsSettings) -> httpx.Response:
         timeout = httpx.Timeout(

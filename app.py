@@ -29,6 +29,7 @@ from modules.utils.logger import get_logger
 from modules.utils.task_status_store import TaskStatusStore
 from modules.qsd_api.router import create_qsd_router
 from modules.qsd_api.service import QSDTranscriptionService
+from modules.qsd_api.watchdog import Watchdog
 from modules.elevenlabs_transcription.models import ElevenLabsSettings, TranscriptionProvider
 from modules.elevenlabs_transcription.pipeline import ElevenLabsTranscriptionPipeline
 
@@ -240,6 +241,7 @@ class App:
         input_folder_path: str | None = None,
         include_subdirectory: bool = False,
         save_same_dir: bool = False,
+        allow_whisper_fallback: bool = True,
     ) -> tuple[str, list[str], str]:
         selected_provider = provider if isinstance(provider, TranscriptionProvider) else TranscriptionProvider.parse(provider)
         selected_output_dir = self.normalize_output_dir(output_dir) or self.get_default_output_dir()
@@ -284,7 +286,7 @@ class App:
             add_timestamp=add_timestamp,
             output_dir=selected_output_dir,
             status_callback=status_callback,
-            fallback=whisper_fallback,
+            fallback=whisper_fallback if allow_whisper_fallback else None,
         )
 
     def transcribe_youtube_with_task_tracking(self,
@@ -1005,6 +1007,12 @@ class App:
         qsd_service = QSDTranscriptionService(self)
         parent_app.include_router(create_qsd_router(qsd_service))
         parent_app.add_event_handler("shutdown", qsd_service.shutdown)
+        if (os.environ.get("QSD_TRANSCRIPTION_WATCHDOG_ENABLED") == "true"
+                and os.environ.get("TRANSCRIBE_PROVIDER") == "elevenlabs"
+                and os.environ.get("QSD_BACKEND_API_KEY", "").strip()):
+            watchdog = Watchdog(self.task_status_store)
+            parent_app.add_event_handler("startup", watchdog.start)
+            parent_app.add_event_handler("shutdown", watchdog.stop)
 
         if args.share:
             logger.warning("Gradio share=True is ignored in FastAPI parent app mode.")
