@@ -2,7 +2,7 @@ services:
   whisper-webui:
     container_name: whisper-webui
     build: .
-    image: jhj0517/whisper-webui:latest
+    image: ${WHISPER_PREBUILT_IMAGE:-jhj0517/whisper-webui:latest}
     restart: unless-stopped
     stop_grace_period: 2m
 
@@ -11,6 +11,8 @@ services:
 
     environment:
         QSD_WHISPER_API_KEY: "${QSD_WHISPER_API_KEY:-}"
+        # Retain loopback trust; add only the verified private gateway hop.
+        FORWARDED_ALLOW_IPS: "127.0.0.1,${WHISPER_GATEWAY_PROXY_IP:-127.0.0.1}"
     volumes:
       # You can mount the container's volume paths to directory paths on your local machine.
       # Models will be stored in the `./models' directory on your machine.

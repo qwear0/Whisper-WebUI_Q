@@ -14,3 +14,4 @@ models/
 modules/yt_tmp.wav
 tmp/plans/
 .qo-validation/
+.build.lock

@@ -94,6 +94,34 @@ same label across every boundary without a separate speaker-matching model.
 
 If needed, update the [`docker-compose.yaml`](https://github.com/jhj0517/Whisper-WebUI/blob/master/docker-compose.yaml) to match your environment.
 
+### Private HTTPS and coordinated cold apply
+
+The retained portal frame uses `https://transcriber.quasilegend.ru/`. Uvicorn must
+trust only the verified private gateway hop to preserve HTTPS redirects. Compose
+retains loopback trust and adds `WHISPER_GATEWAY_PROXY_IP` from the ignored `.env`.
+Without that selected value, only loopback is trusted. Never use `*`, a CIDR, or
+an arbitrary proxy list. Verify the TCP peer through the gateway's actual Docker
+network and host-published route; a container's default gateway alone is not proof.
+
+`apply_prebuilt.sh` is the supported cold-only entrypoint. Supply exactly
+`--image=whisper-webui=sha256:ID` and `--proxy-ip=PRIVATE_IPV4` from the sealed
+release packet. It requires clean canonical `master`, a checkout lock, unchanged
+HEAD/resolved configuration and the same expected local image ID initially and
+immediately before apply. The helper overrides `WHISPER_PREBUILT_IMAGE` with that
+immutable ID rather than resolving a mutable tag at apply. Normal Compose keeps
+the existing image default; do not set this override for ordinary builds.
+It never builds, pulls, pushes or deletes volumes, and
+applies only `whisper-webui`. The resolved trust must be loopback plus that one IP.
+Use `tests/test_prebuilt_deployment.py` for fake-command regression validation.
+
+Before the single coordinated window, validate the source/image provenance,
+protect models/configs/outputs, stop new work and drain active transcription tasks
+without cancellation. The helper's two-minute stop grace and Compose `--wait`
+(running state, no application healthcheck) do not prove task drain or HTTPS
+readiness. Verify redirect, API auth and browser behavior afterward without paid
+inference. Existing credentials, mounted data, networks and launch mode remain.
+No standalone restart is implied by this source preparation.
+
 - ## Run Locally
 
 ### Prerequisite
