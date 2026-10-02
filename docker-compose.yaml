@@ -17,9 +17,9 @@ services:
       # You can mount the container's volume paths to directory paths on your local machine.
       # Models will be stored in the `./models' directory on your machine.
       # Similarly, all output files will be stored in the `./outputs` directory.
-      - ./models:/Whisper-WebUI/models
-      - ./outputs:/Whisper-WebUI/outputs
-      - ./configs:/Whisper-WebUI/configs
+      - ${WHISPER_STATE_ROOT:-.}/models:/Whisper-WebUI/models
+      - ${WHISPER_STATE_ROOT:-.}/outputs:/Whisper-WebUI/outputs
+      - ${WHISPER_STATE_ROOT:-.}/configs:/Whisper-WebUI/configs
       - /data/ObsidianVault/Inner/AI/Whisper_Results:/data/ObsidianVault/Inner/AI/Whisper_Results
 
     ports:

@@ -114,8 +114,15 @@ It never builds, pulls, pushes or deletes volumes, and
 applies only `whisper-webui`. The resolved trust must be loopback plus that one IP.
 Use `tests/test_prebuilt_deployment.py` for fake-command regression validation.
 
+A clean release checkout must set `WHISPER_STATE_ROOT` to the existing absolute
+state directory (models/configs/outputs) and preserve the existing Compose project
+name. The default `.` retains ordinary local behavior. Verify all resolved bind
+sources against the running container before apply; never initialize an empty
+state directory or replace the working configuration with Git defaults.
+
 Before the single coordinated window, validate the source/image provenance,
-protect models/configs/outputs, stop new work and drain active transcription tasks
+preserve those binds and protect only irreplaceable at-risk configuration/output
+state, not reconstructible model caches. Stop new work and drain active transcription tasks
 without cancellation. The helper's two-minute stop grace and Compose `--wait`
 (running state, no application healthcheck) do not prove task drain or HTTPS
 readiness. Verify redirect, API auth and browser behavior afterward without paid

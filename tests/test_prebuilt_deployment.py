@@ -161,7 +161,8 @@ def test_compose_retains_existing_auth_data_networks_and_launch():
     assert s["entrypoint"] == ["python", "app.py", "--server_port", "7860", "--server_name", "0.0.0.0"]
     assert s["image"] == "${WHISPER_PREBUILT_IMAGE:-jhj0517/whisper-webui:latest}"
     assert s["stop_grace_period"] == "2m"
-    assert s["volumes"] == ["./models:/Whisper-WebUI/models", "./outputs:/Whisper-WebUI/outputs",
-                            "./configs:/Whisper-WebUI/configs",
+    assert s["volumes"] == ["${WHISPER_STATE_ROOT:-.}/models:/Whisper-WebUI/models",
+                            "${WHISPER_STATE_ROOT:-.}/outputs:/Whisper-WebUI/outputs",
+                            "${WHISPER_STATE_ROOT:-.}/configs:/Whisper-WebUI/configs",
                             "/data/ObsidianVault/Inner/AI/Whisper_Results:/data/ObsidianVault/Inner/AI/Whisper_Results"]
     assert ".build.lock" in (ROOT / ".gitignore").read_text().splitlines()
